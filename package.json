@@ -1,0 +1,7 @@
+{
+  "name": "edge-data-gateway",
+  "version": "1.0.0",
+  "description": "High-performance edge utility for data synchronization and header management",
+  "private": true,
+  "license": "MIT"
+}
