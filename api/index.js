@@ -1,66 +1,61 @@
-export const config = { runtime: "edge" };
+export const config = {
+  runtime: "edge",
+};
 
-/**
- * High-performance edge utility for data synchronization.
- * Environment Variable: UPSTREAM_PROVIDER (e.g., https://your-backend.com)
- */
-const REMOTE_SERVICE = (process.env.UPSTREAM_PROVIDER || "").replace(/\/$/, "");
+const TARGET_DOMAIN = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
 
-const HOP_BY_HOP = new Set([
-  "host", "connection", "upgrade", "forwarded", "te", "trailer", 
-  "transfer-encoding", "proxy-authenticate", "proxy-authorization",
+const STRIP_HEADERS = new Set([
+  "host", "connection", "keep-alive", "proxy-authenticate", 
+  "proxy-authorization", "te", "trailer", "transfer-encoding", 
+  "upgrade", "forwarded", "x-forwarded-host", "x-forwarded-proto", 
+  "x-forwarded-port",
 ]);
 
 export default async function handler(req) {
-  const url = new URL(req.url);
-
-  // 1. Bot/Browser Deception: 
-  // If accessed via browser (GET) without XHTTP headers, show a generic message.
-  const isBrowser = req.method === "GET" && !req.headers.get("x-xhttp-id");
-  
-  if (isBrowser && url.pathname === "/") {
-    return new Response("Service Status: Operational", { 
-        status: 200,
-        headers: { "content-type": "text/plain" }
-    });
-  }
-
-  if (!REMOTE_SERVICE) {
-    return new Response("Configuration Not Found", { status: 404 });
+  if (!TARGET_DOMAIN) {
+    return new Response("Infrastructure Configuration Missing", { status: 500 });
   }
 
   try {
-    // 2. Dynamic Routing: Forwards any path and query strings to the upstream.
-    const targetUrl = REMOTE_SERVICE + url.pathname + url.search;
-    const forwardHeaders = new Headers();
+    const url = new URL(req.url);
+    const targetUrl = TARGET_DOMAIN + url.pathname + url.search;
 
+    const headers = new Headers();
     for (const [key, value] of req.headers) {
       const k = key.toLowerCase();
-      
-      if (HOP_BY_HOP.has(k) || k.startsWith("x-vercel-")) {
-        continue;
-      }
-      
-      // Standardize IP forwarding headers
-      if (k === "x-real-ip" || k === "x-forwarded-for") {
-        forwardHeaders.set("x-forwarded-for", value);
-        continue;
-      }
-      
-      forwardHeaders.set(key, value);
+      if (STRIP_HEADERS.has(k) || k.startsWith("x-vercel-")) continue;
+      headers.set(k, value);
     }
 
-    // 3. Optimized Fetch with Streaming
-    return await fetch(targetUrl, {
+    const fetchOpts = {
       method: req.method,
-      headers: forwardHeaders,
-      body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
-      duplex: "half",
+      headers,
       redirect: "manual",
-    });
+    };
 
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      fetchOpts.body = req.body;
+      fetchOpts.duplex = "half";[cite: 3]
+    }
+
+    const upstream = await fetch(targetUrl, fetchOpts);
+    
+    if (url.pathname === "/static/assets/sync") {
+        const text = await upstream.text();
+        return new Response(text, { status: upstream.status });
+    }
+
+    const respHeaders = new Headers();
+    for (const [k, v] of upstream.headers) {
+      if (k.toLowerCase() === "transfer-encoding") continue;
+      respHeaders.set(k, v);
+    }
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: respHeaders,
+    });
   } catch (err) {
-    console.error("Gateway Exception:", err.message);
-    return new Response("Service Unavailable", { status: 502 });
+    return new Response("Service Temporarily Unavailable", { status: 503 });
   }
 }
