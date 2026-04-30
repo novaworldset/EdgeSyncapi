@@ -1,29 +1,24 @@
 export const config = { runtime: "edge" };
 
 /**
- * Global configuration:
- * Set "UPSTREAM_PROVIDER" in Vercel Environment Variables.
- * Example: https://api.yourserver.com
+ * High-performance edge utility for data synchronization.
+ * Environment Variable: UPSTREAM_PROVIDER (e.g., https://your-backend.com)
  */
 const REMOTE_SERVICE = (process.env.UPSTREAM_PROVIDER || "").replace(/\/$/, "");
 
-const HOP_BY_HOP_HEADERS = new Set([
-  "host",
-  "connection",
-  "upgrade",
-  "forwarded",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "proxy-authenticate",
-  "proxy-authorization",
+const HOP_BY_HOP = new Set([
+  "host", "connection", "upgrade", "forwarded", "te", "trailer", 
+  "transfer-encoding", "proxy-authenticate", "proxy-authorization",
 ]);
 
 export default async function handler(req) {
   const url = new URL(req.url);
 
-  // Default health check for browser access
-  if (req.method === "GET" && url.pathname !== "/sync") {
+  // 1. Bot/Browser Deception: 
+  // If accessed via browser (GET) without XHTTP headers, show a generic message.
+  const isBrowser = req.method === "GET" && !req.headers.get("x-xhttp-id");
+  
+  if (isBrowser && url.pathname === "/") {
     return new Response("Service Status: Operational", { 
         status: 200,
         headers: { "content-type": "text/plain" }
@@ -31,22 +26,22 @@ export default async function handler(req) {
   }
 
   if (!REMOTE_SERVICE) {
-    return new Response("Service Configuration Missing", { status: 404 });
+    return new Response("Configuration Not Found", { status: 404 });
   }
 
   try {
+    // 2. Dynamic Routing: Forwards any path and query strings to the upstream.
     const targetUrl = REMOTE_SERVICE + url.pathname + url.search;
     const forwardHeaders = new Headers();
 
-    // Single-pass header sanitization
     for (const [key, value] of req.headers) {
       const k = key.toLowerCase();
       
-      if (HOP_BY_HOP_HEADERS.has(k) || k.startsWith("x-vercel-")) {
+      if (HOP_BY_HOP.has(k) || k.startsWith("x-vercel-")) {
         continue;
       }
       
-      // Standardize client IP forwarding
+      // Standardize IP forwarding headers
       if (k === "x-real-ip" || k === "x-forwarded-for") {
         forwardHeaders.set("x-forwarded-for", value);
         continue;
@@ -55,7 +50,8 @@ export default async function handler(req) {
       forwardHeaders.set(key, value);
     }
 
-    const response = await fetch(targetUrl, {
+    // 3. Optimized Fetch with Streaming
+    return await fetch(targetUrl, {
       method: req.method,
       headers: forwardHeaders,
       body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
@@ -63,10 +59,8 @@ export default async function handler(req) {
       redirect: "manual",
     });
 
-    return response;
   } catch (err) {
-    // Generic error logging for debugging
-    console.error("Gateway Error:", err.message);
-    return new Response("Service Unavailable", { status: 504 });
+    console.error("Gateway Exception:", err.message);
+    return new Response("Service Unavailable", { status: 502 });
   }
 }
